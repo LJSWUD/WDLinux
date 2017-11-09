@@ -1,0 +1,148 @@
+# 数据库迁移操作
+## 准备环境
+```
+web01：
+安装lnmp+博客
+db01：
+安装mysql服务
+nfs01：
+安装nfs服务
+cd /home/oldboy/tools/
+scp -rp mysql-5.6.34-linux-glibc2.5-x86_64.tar.gz 172.16.1.51:/home/oldboy/tools/
+```
+第一个里程碑-部署mysql服务（db01）
+01.下载解压软件程序
+# 解压mysql二进制包软件程序
+cd /home/oldboy/tools
+tar xf mysql-5.6.34-linux-glibc2.5-x86_64.tar.gz
+# 移动解压目录到系统程序保存目录中
+mkdir -p /application/
+mv /home/oldboy/tools/mysql-5.6.34-*-x86_64 /application/mysql-5.6.34
+02.添加数据管理用户
+# 确认数据管理用户是否存在
+id mysql
+# 进行程序运行用户添加
+useradd mysql -s /sbin/nologin -M
+03.创建MySQL程序目录的软链接
+ln -s /application/mysql-5.6.34/ /application/mysql
+04.对数据库中数据目录授权
+chown -R mysql.mysql /application/mysql/data/
+05.对数据库进行初始化操作
+cd /application/mysql
+/application/mysql/scripts/mysql_install_db --basedir=/application/mysql --datadir=/application/mysql/data --user=mysql
+06.编写修改启动脚本
+# 复制启动脚本并授权
+cp /application/mysql/support-files/mysql.server  /etc/init.d/mysqld
+chmod +x /etc/init.d/mysqld 
+# 修改启动脚本文件内容（调整程序安装目录信息）
+sed -i 's#/usr/local/mysql#/application/mysql#g' /application/mysql/bin/mysqld_safe /etc/init.d/mysqld
+07.设置服务配置文件
+# 利用mysql程序默认配置文件替换系统中数据库配置文件
+cp /application/mysql/support-files/my-default.cnf /etc/my.cnf 
+08.启动mysql数据库程序服务
+/etc/init.d/mysqld start
+09.登录进入数据库中
+# 设置数据库登录初始密码信息
+/application/mysql/bin/mysqladmin -u root password 'oldboy123'
+# 将数据库命令加入环境变量中
+echo 'export PATH=/application/mysql/bin:$PATH' >>/etc/profile
+source /etc/profile
+which mysql
+# mysql -uroot -poldboy123
+
+10.加入开机自启动
+chkconfig --add mysqld 
+chkconfig mysqld on
+11.查看服务是否开启
+netstat -lntup|grep mysql
+
+第二个里程碑-备份数据（web01）
+01.备份数据
+/etc/init.d/mysqld start
+mysqldump -uroot -poldboy123 --all-databases >/tmp/mysqlbak.sql
+
+02.将备份数据推送到db01上
+scp -rp /tmp/mysqlbak.sql 172.16.1.51:/tmp
+
+03.将mysql的主机地址localhost修改为ip形式
+vim /application/nginx/html/blog/wp-config.php 
+/** MySQL数据库用户名 */
+define('DB_USER', 'wordpress');
+/** MySQL数据库密码 */
+define('DB_PASSWORD', 'oldboy123');
+/** MySQL主机 */
+define('DB_HOST', '172.16.1.51');
+
+
+
+第三个里程碑-数据还原（db01）
+01.还原数据库
+mysql -uroot -poldboy123 </tmp/mysqlbak.sql
+02.授权刷新(root权限登录)
+mysql -uroot -poldboy123
+grant all on wordpress.* to 'wordpress'@'172.16.1.0/255.255.255.0' identified by 'oldboy123';
+flush privileges;
+select user,host from mysql.user;
+
+03.使用wordpress用户登录
+mysql -uwordpress -poldboy123 -h 172.16.1.51
+
+第四个里程碑-网站上的数据挂着到nfs服务器上
+服务端的操作（nfs）------------------------------------
+01.检查软件是否存在：
+rpm -qa nfs-utils rpcbind
+02.进行软件安装
+yum install nfs-utils rpcbind -y
+03.对安装的两个软件进行启动（先启动rpcbind，再启动nfs）
+/etc/init.d/rpcbind start
+/etc/init.d/nfs start
+04.查看服务是否开启
+ss -lntup|egrep "rpcbind|nfs"
+05.加入开机自启动及查看
+chkconfig rpcbind on
+chkconfig nfs on
+chkconfig --list|awk '$1~/nfs$|rpcbind/'
+06.修改配置文件
+vim /etc/exports 
+/data 172.16.1.0/24(rw,sync,all_squash)
+07.创建共享目录
+mkdir -p /data 
+ll -d /data/
+08.修改共享目录的属主属组的权限
+chown -R nfsnobody.nfsnobody /data/
+09.重启nfs服务并查看是否支持挂载
+/etc/init.d/nfs reload
+showmount -e 172.16.1.31
+注意：修改完配置文件一定要平滑重启哦
+
+web01服务的操作--------------------------------------
+01.创建一个备份用户数据的目录
+mkdir -p /tmp/nfsbak
+02.先将用户的数据移动到tmp目录下
+cd /application/nginx/html/blog/wp-content/uploads
+mv 2017/ /tmp/nfsbak/
+03.进行软件安装
+yum install nfs-utils -y
+04.检查是否支持挂载
+showmount -e 172.16.1.31
+05.挂载上传目录到nfs上及查看是否挂载成功
+cd /application/nginx/html/blog/wp-content
+mount -t nfs 172.16.1.31:/data ./uploads
+df -h
+06.进行测试
+a.web01端
+  [root@web01 uploads]# touch a.txt
+  [root@web01 uploads]# ll
+  total 0
+  -rw-r--r-- 1 nfsnobody nfsnobody 0 Sep 13 15:40 a.txt
+b.nfs01端
+  [root@nfs01 data]# ll
+  total 0
+  -rw-r--r-- 1 nfsnobody nfsnobody 0 Sep 13 15:40 a.txt
+07.最后，将用户的数据移动到upload目录下
+mv /tmp/nfsbak/2017/ /application/nginx/html/blog/wp-content/uploads/
+
+
+最终：
+web数据库停掉，开启db01数据库
+
