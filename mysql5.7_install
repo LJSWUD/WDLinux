@@ -1,0 +1,20 @@
+mysql安装（5.7）
+#部署
+tar xf mysql-5.7.17-linux-glibc2.5-x86_64.tar.gz
+mv mysql-5.7.17-linux-glibc2.5-x86_64 /application/mysql-5.7.17
+#授权
+chown -R mysql.mysql /application/mysql-5.7.17
+#初始化
+/application/mysql-5.7.17/bin/mysqld --initialize --user=mysql --basedir=/application/mysql-5.7.17 --datadir=/application/mysql-5.7.17/data
+
+记录初始密码（一定要记录）
+2017-11-13T11:26:40.711523Z 1 [Note] A temporary password is generated for root@localhost: i3fBr#tX0kkg
+#拷贝配置文件和启动文件
+cp /application/mysql-5.7.17/support-files/my-default.cnf /etc/my.cnf
+cp /application/mysql-5.7.17/support-files/mysql.server /etc/init.d/mysqld
+#修改启动文件内容
+sed 's#/usr/local#/application#g' /application/mysql-5.7.17/bin/mysqld_safe /etc/init.d/mysqld -i
+#启动
+/etc/init.d/mysqld start
+#修改root密码
+mysqladmin -uroot -p password '123456'
